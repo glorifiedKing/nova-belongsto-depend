@@ -35,6 +35,7 @@ class NovaBelongsToDepend extends BelongsTo
 
     public $showLinkToResourceFromDetail = true;
     public $showLinkToResourceFromIndex = true;
+    public $ignoreRelation = false;
 
     /**
      * The field's component.
@@ -110,6 +111,11 @@ class NovaBelongsToDepend extends BelongsTo
         $this->showLinkToResourceFromDetail = false;
         return $this;
     }
+    public function ignoreRelation()
+    {
+        $this->ignoreRelation = true;
+        return $this;
+    }
 
     public function hideLinkToResourceFromIndex()
     {
@@ -129,21 +135,42 @@ class NovaBelongsToDepend extends BelongsTo
             return $this;
         }
 
-        parent::resolve($resource, $attribute);
-        $this->resourceParentClass = get_class(Nova::newResourceFromModel($resource));
-
-        $foreign = $resource->{$this->attribute}();
-        $this->foreignKeyName = $foreign->getForeignKeyName();
-
-        $value = $resource->{$this->attribute}()->withoutGlobalScopes()->first();
-        if ($value) {
-            $this->valueKey = $value->getKey();
-            $this->value = $this->formatDisplayValue($value);
-        }
-
-        if ($this->fallback) {
-            $this->fallback->resolve($resource);
-        }
+        if($this->ignoreRelation){
+            // parent::resolveAttribute($resource,$attribute);
+            parent::resolve($resource, $attribute);
+            $this->resourceParentClass = get_class(Nova::newResourceFromModel($resource));
+ 
+             $foreign = $resource->{$this->attribute}();
+             $this->foreignKeyName = $this->attribute;//$foreign->getForeignKeyName();
+ 
+             $value = $resource->{$this->attribute}()->withoutGlobalScopes()->first();
+             if ($value) {
+                 $this->valueKey = $value->getKey();
+                 $this->value = $this->formatDisplayValue($value);
+             }
+ 
+             //parent::resolveAttribute($resource,$attribute);
+             $this->value = data_get($resource, str_replace('->', '.', $attribute));
+             $this->valueKey = $resource->{$this->attribute};
+         }
+ 
+         else{
+             parent::resolve($resource, $attribute);
+             $this->resourceParentClass = get_class(Nova::newResourceFromModel($resource));
+ 
+             $foreign = $resource->{$this->attribute}();
+             $this->foreignKeyName = $foreign->getForeignKeyName();
+ 
+             $value = $resource->{$this->attribute}()->withoutGlobalScopes()->first();
+             if ($value) {
+                 $this->valueKey = $value->getKey();
+                 $this->value = $this->formatDisplayValue($value);
+             }
+ 
+             if ($this->fallback) {
+                 $this->fallback->resolve($resource);
+             }
+         }
     }
 
     /**
@@ -156,6 +183,10 @@ class NovaBelongsToDepend extends BelongsTo
 
         if ($resource->{$this->foreignKeyName} === null && $this->fallback) {
             $this->value = $resource->{$this->fallback->attribute};
+            return;
+        }
+        if($this->ignoreRelation){
+            $this->value = $resource->{$this->attribute};
             return;
         }
 
@@ -223,6 +254,59 @@ class NovaBelongsToDepend extends BelongsTo
             'fallback' => $this->fallback,
             'showLinkToResourceFromDetail' => $this->showLinkToResourceFromDetail,
             'showLinkToResourceFromIndex' => $this->showLinkToResourceFromIndex,
+            'ignoreRelation' => $this->ignoreRelation,
         ], $this->meta);
+    }
+
+    /**
+     * Get the validation rules for this field.
+     *
+     * @param  \Laravel\Nova\Http\Requests\NovaRequest  $request
+     * @return array
+     */
+    public function getRules(NovaRequest $request)
+    {
+        $query = $this->buildAssociatableQuery(
+            $request, $request->{$this->attribute.'_trashed'} === 'true'
+        )->toBase();
+        if($this->ignoreRelation){
+            return array_merge_recursive([$this->attribute => is_callable($this->rules)
+            ? call_user_func($this->rules, $request)
+            : $this->rules, ], [
+                $this->attribute => array_filter([
+                    $this->nullable ? 'nullable' : 'required',
+                    
+                ]),
+            ]); 
+            ;
+        } 
+        else {
+            return array_merge_recursive(parent::getRules($request), [
+                
+            ]);
+        }   
+        
+    }
+
+     /**
+     * Hydrate the given attribute on the model based on the incoming request.
+     *
+     * @param  \Laravel\Nova\Http\Requests\NovaRequest  $request
+     * @param  object  $model
+     * @return void
+     */
+    public function fill(NovaRequest $request, $model)
+    {
+        $foreignKey = ($this->ignoreRelation) ? $this->attribute : $this->getRelationForeignKeyName($model->{$this->attribute}());
+
+        parent::fillInto($request, $model, $foreignKey);
+
+        if ($model->isDirty($foreignKey)) {
+            $model->unsetRelation($this->attribute);
+        }
+
+        if ($this->filledCallback) {
+            call_user_func($this->filledCallback, $request, $model);
+        }
     }
 }
